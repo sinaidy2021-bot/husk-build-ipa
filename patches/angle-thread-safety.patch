@@ -1,0 +1,26 @@
+--- a/scripts/build_angle_ios.sh
++++ b/scripts/build_angle_ios.sh
+@@ -31,6 +31,14 @@
+ ( cd "$WK" && git sparse-checkout set \
+     Source/ThirdParty/ANGLE Configurations Tools/Scripts Tools/ccache )
+
++# Workaround (2026-11-05): WebKit's current ANGLE SimpleMutex.h annotates
++# std::mutex with ACQUIRE/RELEASE_CAPABILITY, which Xcode 26's clang rejects
++# as -Werror under -Wthread-safety-*. The annotations are static-analysis
++# hints only; stripping them changes no generated code.
++sed -i '' -e 's/ ANGLE_ACQUIRE_CAPABILITY(mutex)//' \
++          -e 's/ ANGLE_RELEASE_CAPABILITY(mutex)//' \
++    "$WK/Source/ThirdParty/ANGLE/src/common/SimpleMutex.h"
++
+ cd "$WK/Source/ThirdParty/ANGLE"
+
+ # Two overrides worth explaining.
+@@ -68,7 +76,7 @@
+         WK_AVAILABILITY_OVERLAY_FLAGS="" WK_AVAILABILITY_OVERLAY_SWIFT_FLAGS="" \
+         IPHONEOS_DEPLOYMENT_TARGET="15.5" \
+         OTHER_CFLAGS='$(inherited) -Wno-unguarded-availability-new' \
+-        OTHER_CPLUSPLUSFLAGS='$(inherited) -Wno-unguarded-availability-new' \
++        OTHER_CPLUSPLUSFLAGS='$(inherited) -Wno-unguarded-availability-new -Wno-error=thread-safety-attributes -Wno-error=thread-safety-analysis' \
+         ${ldflags[@]+"${ldflags[@]}"} \
+         > "$LOG" 2>&1 \
+       || { echo "ANGLE build failed; last errors:" >&2
