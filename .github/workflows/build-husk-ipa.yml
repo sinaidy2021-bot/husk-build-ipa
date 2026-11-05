@@ -1,0 +1,131 @@
+# 在 GitHub 的 macOS 机器上从源码构建 Husk（iPhone 上跑 Android 的开源项目），
+# 产出 Husk.ipa（adhoc 签名 = 实际意义上的未签名包），下载后用自己的个人证书重签安装。
+#
+# 引擎是开源项目 Husk（GPL-2.0-or-later）：https://github.com/Leviidev/Husk
+# 本 workflow 只是它的云端构建流水线，不包含引擎源码；构建时按下面锁定的
+# commit 拉取官方源码，再运行官方构建脚本 scripts/ci_build.sh。
+#
+# 用法：把本仓库推到 GitHub → Actions 页 → Build Husk IPA → Run workflow。
+# 首次构建要现编译 QEMU / ANGLE / glib / MoltenVK 等全部依赖，耗时较长
+# （实测前请按 1–3 小时预留，GitHub 公共仓库单 job 上限 360 分钟）。
+
+name: Build Husk IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      husk_ref:
+        description: "Husk 源码 commit / tag（留空用下面锁定的版本）"
+        required: false
+        default: ""
+  push:
+    paths:
+      - ".github/workflows/build-husk-ipa.yml"
+
+# 同一时间只跑一个构建，重复触发时取消旧的，省额度
+concurrency:
+  group: build-husk-ipa
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned Husk.ipa
+    runs-on: macos-15
+    timeout-minutes: 350
+
+    env:
+      # 2026-11-03 的 Husk 主线 HEAD，在这个版本上核对过构建脚本与工程结构
+      HUSK_PINNED_COMMIT: d92d0a112a391833584ac61f21296e566e404cb8
+
+    steps:
+      - name: Checkout this build repo
+        uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+          python3 --version
+
+      - name: Install build tools (Homebrew)
+        run: |
+          brew update
+          brew install meson ninja pkg-config xcodegen qemu
+          # qemu-img 由 qemu 这个 formula 提供，Husk 官方构建依赖清单里有它
+          which qemu-img meson ninja pkg-config xcodegen
+
+      - name: Install Rust target for iOS
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install stable
+          rustup default stable
+          rustup target add aarch64-apple-ios
+          rustc --version
+
+      - name: Cache downloaded dependency sources
+        uses: actions/cache@v4
+        with:
+          path: husk/third_party/sources
+          key: husk-dep-sources-${{ env.HUSK_PINNED_COMMIT }}
+          restore-keys: |
+            husk-dep-sources-
+
+      - name: Clone Husk at pinned commit
+        run: |
+          REF="${{ inputs.husk_ref }}"
+          if [ -z "$REF" ]; then REF="$HUSK_PINNED_COMMIT"; fi
+          echo "Building Husk ref: $REF"
+          git clone https://github.com/Leviidev/Husk.git husk
+          cd husk
+          git checkout "$REF"
+          git log -1 --format='%H %ci %s'
+
+      - name: Build everything and package the IPA
+        working-directory: husk
+        run: |
+          set -o pipefail
+          # 官方一键构建：拉依赖源码 → 编译 libffi/glib/pixman/libslirp →
+          # ANGLE → virglrenderer → QEMU → 集成本体源码重编 QEMU →
+          # 拉 guest 内核/固件 → MoltenVK → Rust 配对组件 → 打包 IPA
+          ./scripts/ci_build.sh 2>&1 | tee "$GITHUB_WORKSPACE/ci_build.log"
+          ls -lh build/
+
+      - name: Verify IPA structure
+        run: |
+          test -f husk/build/Husk.ipa
+          unzip -l husk/build/Husk.ipa | head -30
+          # IPA 里必须有 Payload/Husk.app 本体
+          unzip -l husk/build/Husk.ipa | grep -q "Payload/Husk.app/Husk" \
+            || { echo "IPA 结构不对，缺 Payload/Husk.app/Husk"; exit 1; }
+          echo "IPA OK: $(du -h husk/build/Husk.ipa | cut -f1)"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-ipa-unsigned
+          path: |
+            husk/build/Husk.ipa
+            husk/build/Husk.tipa
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload build log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ci_build.log
+          if-no-files-found: ignore
+          retention-days: 30
