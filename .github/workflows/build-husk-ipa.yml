@@ -92,6 +92,18 @@ jobs:
           git checkout "$REF"
           git log -1 --format='%H %ci %s'
 
+      - name: Patch ANGLE thread-safety build issue
+        run: |
+          # 上游 WebKit 的 ANGLE SimpleMutex.h 给 std::mutex 加了
+          # ACQUIRE/RELEASE_CAPABILITY 注解，Xcode 26 的 clang 在
+          # -Wthread-safety-* 下把它当作 -Werror，导致第 1、2 次构建都死
+          # 在 ANGLE 这一步。注解只是静态分析提示，去掉它不改变生成代码；
+          # 同时把这两个警告降级为警告，双保险。
+          cd husk
+          git apply --check ../patches/angle-thread-safety.patch
+          git apply ../patches/angle-thread-safety.patch
+          git diff --stat
+
       - name: Build everything and package the IPA
         working-directory: husk
         run: |
