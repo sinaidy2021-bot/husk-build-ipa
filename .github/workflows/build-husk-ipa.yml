@@ -59,6 +59,10 @@ jobs:
         run: |
           brew update
           brew install meson ninja pkg-config xcodegen qemu
+          # virglrenderer 的 meson 构建需要 PyYAML，而 runner 的 Homebrew
+          # python3 里没有它（第 3 次构建就死在这里）；作者本机有所以没暴露。
+          /opt/homebrew/bin/python3 -m pip install --break-system-packages pyyaml
+          /opt/homebrew/bin/python3 -c "import yaml; print('pyyaml ok')"
           # qemu-img 由 qemu 这个 formula 提供，Husk 官方构建依赖清单里有它
           which qemu-img meson ninja pkg-config xcodegen
 
