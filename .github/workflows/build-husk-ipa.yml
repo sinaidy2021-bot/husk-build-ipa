@@ -108,6 +108,19 @@ jobs:
           git apply ../patches/angle-thread-safety.patch
           git diff --stat
 
+      - name: Patch StikJIT Swift interface for Xcode 26 (Swift 6.2)
+        run: |
+          # Husk 自带的 StikJIT.xcframework 里的 .swiftinterface 是用 Swift 6.4
+          # 生成的，类型用 :: 限定（如 Swift::String），Xcode 26.3 自带的
+          # Swift 6.2 解析不了，app 构建一步就死在这里（第 4 次构建的报错）。
+          # 把 :: 换回 6.2 识别的 . 形式，并去掉 6.2 不认识的实验特性开关；
+          # 只改接口文本，不改二进制库。
+          cd husk/src/app/Frameworks/StikJIT.xcframework/ios-arm64/StikJIT.framework/Modules/StikJIT.swiftmodule
+          sed -i '' 's/::/./g' arm64-apple-ios.swiftinterface arm64-apple-ios.private.swiftinterface
+          sed -i '' 's/ -enable-experimental-feature DebugDescriptionMacro//g' arm64-apple-ios.swiftinterface arm64-apple-ios.private.swiftinterface
+          echo "remaining :: occurrences (expect 0 0):"
+          grep -c '::' arm64-apple-ios.swiftinterface arm64-apple-ios.private.swiftinterface || true
+
       - name: Build everything and package the IPA
         working-directory: husk
         run: |
